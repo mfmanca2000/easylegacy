@@ -9,11 +9,11 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const blobType = searchParams.get("type");
+  const category = searchParams.get("category");
 
   const blobs = await prisma.vaultBlob.findMany({
-    where: blobType ? { blobType } : undefined,
-    select: { id: true, ciphertext: true, iv: true, blobType: true, updatedAt: true },
+    where: category ? { category } : undefined,
+    select: { id: true, entryId: true, category: true, ciphertext: true, iv: true, aad: true, updatedAt: true },
     orderBy: { updatedAt: "desc" },
   });
 

@@ -4,10 +4,11 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 const blobSchema = z.object({
-  id: z.string().uuid().optional(),
+  entryId: z.string().uuid(),
+  category: z.string().min(1),
   ciphertext: z.string().min(1),
   iv: z.string().min(1),
-  blobType: z.enum(["manifest", "entry", "attachment"]).default("entry"),
+  aad: z.string().min(1),
 });
 
 const schema = z.object({
@@ -29,26 +30,21 @@ export async function POST(req: NextRequest) {
 
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
 
-  const { blobs } = parsed.data;
-
   const results = await Promise.all(
-    blobs.map(async (blob) => {
-      if (blob.id) {
-        return prisma.vaultBlob.upsert({
-          where: { id: blob.id },
-          update: { ciphertext: blob.ciphertext, iv: blob.iv, blobType: blob.blobType },
-          create: { id: blob.id, ciphertext: blob.ciphertext, iv: blob.iv, blobType: blob.blobType },
-          select: { id: true, updatedAt: true },
-        });
-      }
-      return prisma.vaultBlob.create({
-        data: { ciphertext: blob.ciphertext, iv: blob.iv, blobType: blob.blobType },
-        select: { id: true, updatedAt: true },
-      });
-    })
+    parsed.data.blobs.map(({ entryId, category, ciphertext, iv, aad }) =>
+      prisma.vaultBlob.upsert({
+        where: { entryId },
+        update: { category, ciphertext, iv, aad },
+        create: { entryId, category, ciphertext, iv, aad },
+        select: { id: true, entryId: true, updatedAt: true },
+      })
+    )
   );
 
   return NextResponse.json({ ok: true, blobs: results });

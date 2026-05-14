@@ -10,9 +10,12 @@ export function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
-export async function verifyOwnerPassword(password: string): Promise<boolean> {
+export async function verifyOwnerCredentials(username: string, password: string): Promise<boolean> {
+  const expectedUsername = process.env.OWNER_USERNAME;
   const hash = process.env.OWNER_PASSWORD_HASH;
   if (!hash) return false;
+  // Username check is optional: if OWNER_USERNAME is not set, skip it.
+  if (expectedUsername && username !== expectedUsername) return false;
   return bcrypt.compare(password, hash);
 }
 

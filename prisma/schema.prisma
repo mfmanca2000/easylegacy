@@ -1,5 +1,5 @@
-// EasyLegacy — Prisma schema
-// Server stores ONLY encrypted blobs. No plaintext data ever.
+// EasyLegacy — Prisma schema (Section 4.2)
+// Server stores ONLY encrypted blobs and hashed identifiers. No plaintext vault data.
 
 generator client {
   provider = "prisma-client-js"
@@ -11,86 +11,115 @@ datasource db {
 }
 
 // ---------------------------------------------------------------------------
-// Encrypted vault blobs — AES-256-GCM ciphertext uploaded by the browser.
-// The server never decrypts these; it is a dumb blob store.
+// Encrypted vault entries — server never sees plaintext.
+// entryId is the UUID from the client-side VaultEntry object.
+// category is stored unencrypted for server-side indexing only.
+// ciphertext, iv, and aad are all base64-encoded strings.
 // ---------------------------------------------------------------------------
 model VaultBlob {
-  id         String   @id @default(uuid())
-  // Base64-encoded ciphertext (AES-256-GCM output)
+  id         String   @id @default(cuid())
+  entryId    String   @unique
+  category   String
   ciphertext String
-  // Base64-encoded 12-byte IV / nonce
   iv         String
-  // "manifest" | "entry" | "attachment"
-  blobType   String   @default("entry")
-  createdAt  DateTime @default(now())
+  aad        String
   updatedAt  DateTime @updatedAt
 
   @@map("vault_blobs")
 }
 
 // ---------------------------------------------------------------------------
-// Owner authentication sessions.
-// The cookie holds the raw token; the DB stores only its SHA-256 hash.
+// Encrypted vault manifest — stores owner name, entry count, KDF params, etc.
+// hmac = HMAC-SHA256(MAK, ciphertext) for tamper detection.
+// ---------------------------------------------------------------------------
+model VaultManifest {
+  id         String   @id @default(cuid())
+  ciphertext String
+  iv         String
+  hmac       String
+  updatedAt  DateTime @updatedAt
+
+  @@map("vault_manifests")
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted file attachments — stored separately from entries.
+// filename and mimeType are unencrypted for display; content is encrypted.
+// ---------------------------------------------------------------------------
+model AttachmentBlob {
+  id         String   @id @default(uuid())
+  entryId    String
+  filename   String
+  mimeType   String
+  sizeBytes  Int
+  ciphertext String
+  iv         String
+  createdAt  DateTime @default(now())
+
+  @@index([entryId])
+  @@map("attachment_blobs")
+}
+
+// ---------------------------------------------------------------------------
+// Trust transfer configuration — singleton, set during owner setup.
+// encryptedOwnerEmail / encryptedSpouseEmail are encrypted with
+// SERVER_ENCRYPTION_KEY so the server can send notification emails.
+// encryptedVekShard is wrapped client-side; server cannot decrypt it.
+// ---------------------------------------------------------------------------
+model TrustConfig {
+  id                   String   @id @default(cuid())
+  ownerEmailHash       String
+  spouseEmailHash      String
+  encryptedOwnerEmail  String
+  encryptedSpouseEmail String
+  waitingPeriodDays    Int      @default(7)
+  encryptedVekShard    String
+  vstHash              String
+  salt2Base64          String
+  configured           Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("trust_configs")
+}
+
+// ---------------------------------------------------------------------------
+// Trust transfer state machine — one active request at a time.
+// blockTokenHash: SHA-256 of the single-click block token emailed to owner.
+// accessTokenHash: SHA-256 of the access link token emailed to spouse on grant.
+// ---------------------------------------------------------------------------
+model TrustRequest {
+  id                String      @id @default(cuid())
+  status            TrustStatus @default(PENDING)
+  spouseNameDisplay String
+  requestedAt       DateTime    @default(now())
+  waitingUntil      DateTime
+  blockTokenHash    String      @unique
+  accessTokenHash   String?     @unique
+  accessTokenExpiry DateTime?
+  blockedAt         DateTime?
+  grantedAt         DateTime?
+
+  @@map("trust_requests")
+}
+
+enum TrustStatus {
+  PENDING
+  BLOCKED
+  GRANTED
+  EXPIRED
+  COMPLETED
+}
+
+// ---------------------------------------------------------------------------
+// Owner authentication sessions — single owner, no user table.
+// The cookie holds the raw 32-byte hex token; DB stores only its SHA-256 hash.
 // ---------------------------------------------------------------------------
 model AuthSession {
-  id        String   @id @default(uuid())
+  id        String   @id @default(cuid())
   tokenHash String   @unique
   createdAt DateTime @default(now())
   expiresAt DateTime
 
   @@map("auth_sessions")
-}
-
-// ---------------------------------------------------------------------------
-// Trust transfer requests — dead-man-switch state machine.
-// ---------------------------------------------------------------------------
-model TrustRequest {
-  id              String            @id @default(uuid())
-  spouseName      String
-  // SHA-256 hashes — server never sees raw email addresses
-  spouseEmailHash String
-  ownerEmailHash  String
-  // SHA-256 of the single-use access token sent to the spouse on grant
-  tokenHash       String?           @unique
-  state           TrustRequestState @default(PENDING)
-  waitingDays     Int               @default(7)
-  requestedAt     DateTime          @default(now())
-  // Computed: requestedAt + waitingDays
-  grantsAt        DateTime
-  reminderSentAt  DateTime?
-  blockedAt       DateTime?
-  grantedAt       DateTime?
-  // Access link valid for 14 days after grant
-  accessExpiresAt DateTime?
-
-  @@map("trust_requests")
-}
-
-enum TrustRequestState {
-  PENDING
-  BLOCKED
-  GRANTED
-  EXPIRED
-}
-
-// ---------------------------------------------------------------------------
-// Vault configuration — one row per deployment (singleton).
-// Stores encrypted VEK shard for spouse, email hashes, and vault KDF salt.
-// ---------------------------------------------------------------------------
-model VaultConfig {
-  // Singleton row — always queried by this fixed id
-  id              String   @id @default("singleton")
-  ownerEmailHash  String
-  spouseEmailHash String
-  waitingDays     Int      @default(7)
-  // Base64-encoded Argon2id salt (32 bytes, public, stored with vault header)
-  vaultSalt       String?
-  // Base64-encoded double-encrypted VEK shard for spouse
-  encryptedShard  String?
-  // Base64-encoded IV used for the outer wrap of the shard
-  shardIv         String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@map("vault_config")
 }

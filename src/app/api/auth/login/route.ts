@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { verifyOwnerPassword, createSession } from "@/lib/auth";
+import { verifyOwnerCredentials, createSession } from "@/lib/auth";
 
 const schema = z.object({
+  username: z.string().min(1).optional(),
   password: z.string().min(1),
 });
 
@@ -19,11 +20,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const valid = await verifyOwnerPassword(parsed.data.password);
+  const valid = await verifyOwnerCredentials(
+    parsed.data.username ?? "",
+    parsed.data.password
+  );
+
   if (!valid) {
-    // Constant-time-ish delay to slow brute force
     await new Promise((r) => setTimeout(r, 400));
-    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
   }
 
   await createSession();
