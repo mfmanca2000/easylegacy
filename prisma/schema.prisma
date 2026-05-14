@@ -1,0 +1,96 @@
+// EasyLegacy — Prisma schema
+// Server stores ONLY encrypted blobs. No plaintext data ever.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted vault blobs — AES-256-GCM ciphertext uploaded by the browser.
+// The server never decrypts these; it is a dumb blob store.
+// ---------------------------------------------------------------------------
+model VaultBlob {
+  id         String   @id @default(uuid())
+  // Base64-encoded ciphertext (AES-256-GCM output)
+  ciphertext String
+  // Base64-encoded 12-byte IV / nonce
+  iv         String
+  // "manifest" | "entry" | "attachment"
+  blobType   String   @default("entry")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("vault_blobs")
+}
+
+// ---------------------------------------------------------------------------
+// Owner authentication sessions.
+// The cookie holds the raw token; the DB stores only its SHA-256 hash.
+// ---------------------------------------------------------------------------
+model AuthSession {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@map("auth_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Trust transfer requests — dead-man-switch state machine.
+// ---------------------------------------------------------------------------
+model TrustRequest {
+  id              String            @id @default(uuid())
+  spouseName      String
+  // SHA-256 hashes — server never sees raw email addresses
+  spouseEmailHash String
+  ownerEmailHash  String
+  // SHA-256 of the single-use access token sent to the spouse on grant
+  tokenHash       String?           @unique
+  state           TrustRequestState @default(PENDING)
+  waitingDays     Int               @default(7)
+  requestedAt     DateTime          @default(now())
+  // Computed: requestedAt + waitingDays
+  grantsAt        DateTime
+  reminderSentAt  DateTime?
+  blockedAt       DateTime?
+  grantedAt       DateTime?
+  // Access link valid for 14 days after grant
+  accessExpiresAt DateTime?
+
+  @@map("trust_requests")
+}
+
+enum TrustRequestState {
+  PENDING
+  BLOCKED
+  GRANTED
+  EXPIRED
+}
+
+// ---------------------------------------------------------------------------
+// Vault configuration — one row per deployment (singleton).
+// Stores encrypted VEK shard for spouse, email hashes, and vault KDF salt.
+// ---------------------------------------------------------------------------
+model VaultConfig {
+  // Singleton row — always queried by this fixed id
+  id              String   @id @default("singleton")
+  ownerEmailHash  String
+  spouseEmailHash String
+  waitingDays     Int      @default(7)
+  // Base64-encoded Argon2id salt (32 bytes, public, stored with vault header)
+  vaultSalt       String?
+  // Base64-encoded double-encrypted VEK shard for spouse
+  encryptedShard  String?
+  // Base64-encoded IV used for the outer wrap of the shard
+  shardIv         String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("vault_config")
+}
